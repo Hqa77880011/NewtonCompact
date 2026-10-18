@@ -63,3 +63,13 @@ Classification reports accuracy, balanced accuracy, macro-F1, NLL, confidence EC
 Parameter counts and forward timing describe the executing process. Use batch size one and a declared device configuration for device latency comparisons. Physical energy and scores from external task evaluators require measured inputs; they are not inferred from parameter counts. All prediction arrays remain available for task-specific evaluation.
 
 The implementation uses the explicit core operations described above with configurable compact networks. Numeric conventions and application-specific information are stated with the method and data schema. The parameter file contains the current defaults.
+
+## Selected reproduction setting
+
+Use the existing cubic compact-model data generator and width-32 network. The added solver consumes a finite JSON nodal circuit with conductances, current sources, fixed node voltages and four-terminal learned devices. It assembles conservative full-terminal stamps, applies damped Newton steps and records convergence, iterations and the actual KCL residual. backward_euler_alpha=1/dt and per-device previous_charge enable a declared transient step; zero selects DC. Singular/nonconvergent solves are explicit outcomes.
+
+```bash
+python -m newton_compact.solver --model runs/full/model.pt --netlist examples/netlist.json --output runs/full/circuit.json
+```
+
+Each device uses nodes=[terminal1,terminal2,terminal3,reference] and technology=[t1,t2] (a length-two vector for the selected network). Fixed-voltage nodes impose the reference; conductances are positive, currents are directed first-to-second, and previous_charge contains four terminal charges from the preceding accepted transient step.
