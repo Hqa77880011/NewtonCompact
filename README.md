@@ -1,75 +1,69 @@
-# Newton-Consistent Neural Compact Models for Reliable Cross-Technology MOSFET Simulation
+# NewtonCompact
 
 Implementation of **Newton-Consistent Neural Compact Models for Reliable Cross-Technology MOSFET Simulation**.
 
-A technology-conditioned neural core predicts independent terminal currents and charges; the last terminal is the exact negative sum. Automatic differentiation forms G+alpha*C. A reference-preconditioned directional stamp mismatch supplies the Newton-consistency penalty, with a stated regularization floor. The model exports currents, charges, stamps, and directional mismatch for device/circuit probe evaluation.
+## Installation
 
-## Install
-
-Use Python 3.10 or later. Create and activate a virtual environment, then install:
+Python >=3.10.
 
 ```bash
 python -m pip install -e .
 ```
 
-## Prepare data
+Inspection environment: Python 3.13.5, NumPy 2.1.3, PyTorch 2.7.1+cu118, SciPy 1.15.3 and scikit-learn 1.6.1. Checks cover Python syntax, JSON/TOML parsing and CLI options against parser definitions; training and evaluation were not run.
+
+## Data and preprocessing
+
+Generate independent cubic device currents, linear charges and analytic stamps with two technology descriptors.
+
+```bash
+newton-compact demo --output data/generated.npz --count 96 --config config.json --seed 13
+newton-compact prepare --input data/generated.npz --output data/prepared
+```
 
 `x[N,V]` contains independent terminal voltages, `technology[N,P]` known device descriptors, `y[N,V]` independent reference currents, `charge[N,V]` reference charges, and `stamp[N,V,V]` reference G+alpha*C. Use measured/TCAD/compact-model sweeps with technology-locked split groups. Current and charge units must be normalized consistently with alpha and stamp.
 
-Arrays use numeric NPZ format, loaded without pickle. `group[N]` identifies independent subjects, devices, scenes, lots, or source images. Related samples must share a group. Optional `split[N]` codes 0/1/2/3 explicitly assign training/validation/calibration/test (three-role input using 0/1/2 remains supported); otherwise ordered groups are allocated 60/15/10/15 to training/validation/calibration/test. Test data never select model parameters or checkpoints.
+Numeric NPZ input uses `group` to keep related samples together. `prepare` writes train/validation/calibration/test archives from ordered groups (60/15/10/15), or honors explicit `split` codes 0/1/2/3.
+
+## Training and inference
 
 ```bash
-newton-compact demo --output data/example.npz --count 96 --config config.json
-newton-compact prepare --input data/example.npz --output data/prepared
+newton-compact train --input data/prepared --output runs/full --config config.json --variant full --epochs 100 --batch-size 16 --seed 13
 ```
 
-The demo defines a small synthetic problem with the documented tensor interface. Use application data in that schema for the paper's evaluation settings.
+Use `--device cuda` to select CUDA; CPU is the default. Keep the configuration, splits and seed fixed across comparisons.
 
-## Train and execute
-
-```bash
-newton-compact train --input data/prepared --output runs/full --config config.json --variant full --epochs 100 --batch-size 16
-newton-compact evaluate --input data/prepared/test.npz --model runs/full/model.pt --output runs/full/evaluation
-newton-compact plot --input runs --output runs/figures
-```
-
-Training uses AdamW and selects the minimum validation objective. `model.pt` stores parameters and configuration; `history.json` records training/validation objectives. Evaluation exports predictions and mechanism tensors to `predictions.npz` and computed scores to `metrics.json`. Plotting exports comparison charts from those actual evaluation files.
-
-`--device cpu` is the default; `--device cuda` selects CUDA. `--lr`, `--epochs`, `--batch-size`, and `--seed` control optimization. Method parameters are in `config.json`; `--set key=value` overrides one value using JSON syntax. Use identical splits and seeds across comparisons.
-
-## Calibration
-
-For interval or classification confidence calibration, use independent groups excluded from fitting and checkpoint selection:
-
-```bash
-newton-compact calibrate --input data/prepared/calibration.npz --model runs/full/model.pt --output runs/full/calibrated.pt
-```
-
-Evaluate `calibrated.pt` with the same evaluation command. Classification uses temperature scaling; numeric intervals use a 90% group-maximum split-calibration expansion. Insufficient independent units retain infinite intervals. Pretraining checkpoints can initialize supervised training with `train --init path/to/model.pt`.
-
-## Baselines and ablations
-
-Available variants: `full`, `baseline`, `no_preconditioning`, `no_charge`. `baseline` removes the paper-specific mechanism while retaining the input and prediction task. Other variants disable their named component.
-
-```bash
-newton-compact train --input data/prepared --output runs/baseline --config config.json --variant baseline
-newton-compact evaluate --input data/prepared/test.npz --model runs/baseline/model.pt --output runs/baseline/evaluation
-```
-
-## Metrics and implementation conventions
-
-Classification reports accuracy, balanced accuracy, macro-F1, NLL, confidence ECE, and worst-group F1; binary tasks add AUROC and AUPRC. Unknown labels use -1 and enable unknown AUROC and OSCR. Segmentation reports Dice, IoU, precision, recall, MAE, Brier/ECE, two-pixel boundary F1, symmetric contour distance, and HD95. Reconstruction reports RMSE, MAE, signed bias, unit-range PSNR, and Gaussian-window SSIM. Each method adds its mechanism metrics where applicable.
-
-Parameter counts and forward timing describe the executing process. Use batch size one and a declared device configuration for device latency comparisons. Physical energy and scores from external task evaluators require measured inputs; they are not inferred from parameter counts. All prediction arrays remain available for task-specific evaluation.
-
-The implementation uses the explicit core operations described above with configurable compact networks. Numeric conventions and application-specific information are stated with the method and data schema. The parameter file contains the current defaults.
-
-## Selected reproduction setting
-
-Use the existing cubic compact-model data generator and width-32 network. The added solver consumes a finite JSON nodal circuit with conductances, current sources, fixed node voltages and four-terminal learned devices. It assembles conservative full-terminal stamps, applies damped Newton steps and records convergence, iterations and the actual KCL residual. backward_euler_alpha=1/dt and per-device previous_charge enable a declared transient step; zero selects DC. Singular/nonconvergent solves are explicit outcomes.
+The bundled nodal circuit uses four terminal nodes per device and two technology descriptors:
 
 ```bash
 python -m newton_compact.solver --model runs/full/model.pt --netlist examples/netlist.json --output runs/full/circuit.json
 ```
 
-Each device uses nodes=[terminal1,terminal2,terminal3,reference] and technology=[t1,t2] (a length-two vector for the selected network). Fixed-voltage nodes impose the reference; conductances are positive, currents are directed first-to-second, and previous_charge contains four terminal charges from the preceding accepted transient step.
+## Evaluation
+
+```bash
+newton-compact evaluate --input data/prepared/test.npz --model runs/full/model.pt --output runs/full/evaluation
+```
+
+## Ablations
+
+Variants: `full`, `baseline`, `no_preconditioning`, `no_charge`. Reuse the prepared data and training seed:
+
+```bash
+newton-compact train --input data/prepared --output runs/baseline --config config.json --variant baseline --epochs 100 --batch-size 16 --seed 13
+newton-compact evaluate --input data/prepared/test.npz --model runs/baseline/model.pt --output runs/baseline/evaluation
+```
+
+## Outputs
+
+- `data/prepared/*.npz`: grouped data splits.
+- `runs/full/model.pt`: validation-selected parameters and model configuration.
+- `runs/full/history.json` and `training.json`: objectives and run settings.
+- `runs/full/evaluation/predictions.npz` and `metrics.json`: predictions/mechanism arrays and computed metrics.
+
+```bash
+newton-compact plot --input runs --output runs/figures
+```
+
+`runs/figures/*.png` compares saved evaluation metrics. All data, checkpoint and output paths are CLI arguments.
+`runs/full/circuit.json` records solved node voltages, convergence, iterations and KCL residual.
